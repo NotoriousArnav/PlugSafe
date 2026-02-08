@@ -1,5 +1,5 @@
-# Blink
-A Simple Blink program with Pico SDK and C.
+# PlugSafe (Malicious USB Detector)
+Device designed to detect malicious usb devices like Rubber Ducky
 
 This is kind of like a Template so you can clone this and run this to Build uf2 Builds for your RP2040 RPi Pico
 

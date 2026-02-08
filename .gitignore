@@ -1,1 +1,30 @@
 build
+build/
+
+# Development scratchpad (research notes, experiments, planning)
+scratchpad/
+
+# Editor artifacts
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.code-workspace
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.a
+*.elf
+*.uf2
+*.bin
+*.hex
+
+# CMake
+CMakeFiles/
+cmake_install.cmake
+Makefile
