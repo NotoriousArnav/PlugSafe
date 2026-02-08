@@ -17,6 +17,10 @@
 #include <stddef.h>
 #include "hardware/i2c.h"
 
+/* I2C Control Bytes for OLED Displays */
+#define OLED_I2C_CTRL_CMD   0x00    /* Control byte for command data */
+#define OLED_I2C_CTRL_DATA  0x40    /* Control byte for pixel data */
+
 /* I2C configuration and state */
 typedef struct {
     i2c_inst_t *i2c;        /* Pico I2C instance (i2c0 or i2c1) */

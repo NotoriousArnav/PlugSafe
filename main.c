@@ -10,6 +10,7 @@
  */
 
 #include "pico/stdlib.h"
+#include <stdio.h>
 #include "oled_i2c.h"
 #include "oled_driver.h"
 #include "oled_display.h"
