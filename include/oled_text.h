@@ -19,7 +19,7 @@
 /* Font definition */
 typedef struct {
     const uint8_t *data;
-    uint8_t width;
+    uint16_t width;  /* Changed from uint8_t to uint16_t - max font size 475 bytes */
     uint8_t height;
     uint8_t char_width;
     char start_char;

@@ -35,6 +35,7 @@ target_include_directories(tinyusb_stub INTERFACE
 # USB Host Module (PlugSafe specific)
 add_library(usb_host STATIC
     src/usb_host.c
+    src/usb_detector.c
     src/threat_analyzer.c
     src/hid_monitor.c
 )

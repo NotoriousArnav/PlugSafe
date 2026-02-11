@@ -20,6 +20,7 @@
 #include "oled_text.h"
 #include "oled_font.h"
 #include "usb_host.h"
+#include "usb_detector.h"
 #include "threat_analyzer.h"
 #include "hid_monitor.h"
 
@@ -48,160 +49,6 @@ static uint8_t current_page = 0;
 /* Time tracking for display updates */
 static uint64_t last_display_update_ms = 0;
 static uint64_t last_usb_poll_ms = 0;
-
-/* Helper: Get current time in milliseconds */
-static uint64_t get_time_ms(void) {
-    return to_ms_since_boot(get_absolute_time());
-}
-
-/* Draw page 1: Status Overview */
-static void draw_page_status(oled_display_t *display, const oled_font_t *font) {
-    oled_display_clear(display);
-    
-    /* Title */
-    oled_draw_string(display, 10, 0, "PlugSafe Status", font, true);
-    oled_draw_hline(display, 0, 10, 128, true);
-    
-    /* Device count */
-    uint8_t device_count = usb_get_device_count();
-    char status_str[32];
-    snprintf(status_str, sizeof(status_str), "Devices: %d/4", device_count);
-    oled_draw_string(display, 5, 15, status_str, font, true);
-    
-    /* Overall threat status */
-    threat_level_e max_threat = THREAT_SAFE;
-    for (uint8_t i = 0; i < device_count; i++) {
-        device_threat_t *threat = threat_get_device_at_index(i);
-        if (threat && threat->threat_level > max_threat) {
-            max_threat = threat->threat_level;
-        }
-    }
-    
-    const char *status_text;
-    switch (max_threat) {
-        case THREAT_MALICIOUS:
-            status_text = "THREAT DETECTED!";
-            break;
-        case THREAT_POTENTIALLY_UNSAFE:
-            status_text = "MONITORING HID";
-            break;
-        default:
-            status_text = "All Clear";
-    }
-    oled_draw_string(display, 5, 25, status_text, font, true);
-    
-    /* Device listing */
-    if (device_count > 0) {
-        oled_draw_string(display, 5, 40, "Devices:", font, true);
-        for (uint8_t i = 0; i < device_count && i < 2; i++) {
-            usb_device_info_t *dev = usb_get_device_at_index(i);
-            if (dev) {
-                const char *type = dev->is_hid ? "HID" : "USB";
-                snprintf(status_str, sizeof(status_str), "%s:%04X/%04X", type, dev->vid, dev->pid);
-                oled_draw_string(display, 10, 50 + (i * 8), status_str, font, false);
-            }
-        }
-    } else {
-        oled_draw_string(display, 5, 50, "No USB devices", font, true);
-    }
-    
-    /* Page indicator */
-    oled_draw_string(display, 110, 55, "1/3", font, false);
-}
-
-/* Draw page 2: Device Details */
-static void draw_page_details(oled_display_t *display, const oled_font_t *font) {
-    oled_display_clear(display);
-    
-    /* Title */
-    oled_draw_string(display, 10, 0, "Device Details", font, true);
-    oled_draw_hline(display, 0, 10, 128, true);
-    
-    /* Show first device details */
-    usb_device_info_t *dev = usb_get_device_at_index(0);
-    
-    if (dev) {
-        char info_str[32];
-        snprintf(info_str, sizeof(info_str), "VID:%04X PID:%04X", dev->vid, dev->pid);
-        oled_draw_string(display, 5, 15, info_str, font, false);
-        
-        oled_draw_string(display, 5, 25, "Product:", font, true);
-        oled_draw_string(display, 5, 33, dev->product[0] ? dev->product : "Unknown", font, false);
-        
-        if (dev->manufacturer[0]) {
-            oled_draw_string(display, 5, 45, "Mfg: ", font, true);
-            oled_draw_string(display, 35, 45, dev->manufacturer, font, false);
-        }
-    } else {
-        oled_draw_string(display, 5, 30, "No devices", font, true);
-    }
-    
-    /* Page indicator */
-    oled_draw_string(display, 110, 55, "2/3", font, false);
-}
-
-/* Draw page 3: HID Monitor */
-static void draw_page_hid_monitor(oled_display_t *display, const oled_font_t *font) {
-    oled_display_clear(display);
-    
-    /* Title */
-    oled_draw_string(display, 10, 0, "HID Monitor", font, true);
-    oled_draw_hline(display, 0, 10, 128, true);
-    
-    /* Show HID activity */
-    device_threat_t *threat = threat_get_device_at_index(0);
-    
-    if (threat && threat->device.is_hid) {
-        char info_str[32];
-        
-        snprintf(info_str, sizeof(info_str), "Rate: %u k/s", threat->hid_reports_per_sec);
-        oled_draw_string(display, 5, 15, info_str, font, true);
-        
-        snprintf(info_str, sizeof(info_str), "Count: %u", threat->hid_report_count);
-        oled_draw_string(display, 5, 25, info_str, font, true);
-        
-        const char *threat_text;
-        switch (threat->threat_level) {
-            case THREAT_MALICIOUS:
-                threat_text = "MALICIOUS!";
-                break;
-            case THREAT_POTENTIALLY_UNSAFE:
-                threat_text = "MONITORING";
-                break;
-            default:
-                threat_text = "SAFE";
-        }
-        oled_draw_string(display, 5, 40, threat_text, font, true);
-        
-        /* Threat level bar */
-        if (threat->hid_reports_per_sec > HID_KEYSTROKE_THRESHOLD_HZ) {
-            oled_draw_rect(display, 5, 50, 118, 10, true, true);
-        } else if (threat->device.is_hid) {
-            oled_draw_rect(display, 5, 50, 118, 10, false, true);
-        }
-    } else {
-        oled_draw_string(display, 5, 30, "No HID devices", font, true);
-    }
-    
-    /* Page indicator */
-    oled_draw_string(display, 110, 55, "3/3", font, false);
-}
-
-/* Handle page navigation via BOOTSEL button */
-static void handle_page_navigation(void) {
-    static uint64_t last_button_press = 0;
-    uint64_t now = get_time_ms();
-    
-    /* Debounce: 200ms */
-    if (now - last_button_press < 200) {
-        return;
-    }
-    
-    /* Note: Reading BOOTSEL requires special handling on RP2040
-     * For now, we'll cycle through pages automatically */
-    current_page = (current_page + 1) % 3;
-    last_button_press = now;
-}
 
 /* Main application */
 int main() {
@@ -260,92 +107,101 @@ int main() {
             sleep_ms(300);
         }
     }
-    printf("Display initialized\n");
+     printf("Display initialized\n");
+     
+     /* Initialize USB detector */
+     printf("Initializing USB detector...\n");
+     usb_detector_init();
+     printf("USB detector initialized\n");
+     
+     /* Initialize threat analyzer */
+     printf("Initializing threat analyzer...\n");
+     threat_analyzer_init();
+     printf("Threat analyzer initialized\n\n");
+     
+      /* Get font for text rendering */
+     const oled_font_t *font = oled_get_font_5x7();
+     printf("Font info: width=%d, height=%d, char_width=%d, start=0x%02X, end=0x%02X\n",
+            font->width, font->height, font->char_width, font->start_char, font->end_char);
+  
+     /* Simple Hello World display */
+     oled_display_clear(&display);
+     printf("Drawing 'Hello World' at (10, 20)\n");
+     int drawn_width = oled_draw_string(&display, 10, 20, "Hello World", font, true);
+     printf("String drawn, width returned: %d\n", drawn_width);
+     
+     printf("Flushing to display...\n");
+     bool flush_result = oled_display_flush(&display);
+     printf("Flush result: %s\n", flush_result ? "SUCCESS" : "FAILED");
     
-    /* Get font for text rendering */
-    const oled_font_t *font = oled_get_font_5x7();
+     /* Blink LED to indicate startup complete */
+     for (int i = 0; i < 3; i++) {
+         gpio_put(LED_PIN, 1);
+         sleep_ms(100);
+         gpio_put(LED_PIN, 0);
+         sleep_ms(100);
+     }
     
-    /* Initialize USB host */
-    printf("\nInitializing USB host...\n");
-    if (!usb_host_init()) {
-        printf("ERROR: USB host initialization failed\n");
-        while (1) {
-            gpio_put(LED_PIN, 1);
-            sleep_ms(500);
-            gpio_put(LED_PIN, 0);
-            sleep_ms(500);
-        }
-    }
+     printf("\nEntering main event loop...\n");
+     printf("Display will refresh every %d ms\n", DISPLAY_UPDATE_INTERVAL_MS);
+     printf("USB polling every %d ms\n\n", USB_HOST_POLL_INTERVAL_MS);
+     
+     /* Main event loop */
+     while (1) {
+         uint64_t now_ms = time_us_64() / 1000;
+         
+         /* USB Host polling (every 10ms) */
+         if (now_ms - last_usb_poll_ms >= USB_HOST_POLL_INTERVAL_MS) {
+             last_usb_poll_ms = now_ms;
+             /* TODO: Call usb_host_poll() here */
+         }
+         
+         /* Display refresh (every 500ms) */
+         if (now_ms - last_display_update_ms >= DISPLAY_UPDATE_INTERVAL_MS) {
+             last_display_update_ms = now_ms;
+             
+             /* Clear and redraw display based on current page */
+             oled_display_clear(&display);
+             
+             /* Draw page content */
+             switch (current_page) {
+                 case 0:
+                     /* Status page */
+                     oled_draw_string(&display, 5, 5, "=== PlugSafe ===", font, true);
+                     oled_draw_string(&display, 5, 15, "Status: MONITORING", font, true);
+                     oled_draw_string(&display, 5, 25, "USB Devices: 0", font, true);
+                     oled_draw_string(&display, 5, 35, "Threat Level: SAFE", font, true);
+                     oled_draw_string(&display, 5, 50, "Uptime: ", font, true);
+                     break;
+                     
+                 case 1:
+                     /* Device details page */
+                     oled_draw_string(&display, 5, 5, "No USB Devices", font, true);
+                     oled_draw_string(&display, 5, 15, "Connected", font, true);
+                     break;
+                     
+                 case 2:
+                     /* HID monitor page */
+                     oled_draw_string(&display, 5, 5, "HID Monitor", font, true);
+                     oled_draw_string(&display, 5, 15, "Keystroke Rate: 0", font, true);
+                     oled_draw_string(&display, 5, 25, "Threat: NONE", font, true);
+                     break;
+                     
+                 default:
+                     current_page = 0;
+                     break;
+             }
+             
+             /* Flush to display */
+             oled_display_flush(&display);
+             
+             /* Blink LED every second (toggle on display update at 2Hz) */
+             gpio_put(LED_PIN, (now_ms / 500) % 2);
+         }
+         
+         /* Small sleep to prevent busy-waiting */
+         sleep_ms(1);
+     }
     
-    /* Initialize threat analyzer */
-    printf("\nInitializing threat analyzer...\n");
-    threat_analyzer_init();
-    
-    /* Initialize HID monitor */
-    printf("\nInitializing HID monitor...\n");
-    hid_monitor_init();
-    
-    /* Show startup screen */
-    printf("\nStartup complete. Entering main loop...\n");
-    printf("=====================================\n\n");
-    
-    oled_display_clear(&display);
-    oled_draw_string(&display, 20, 20, "PlugSafe", font, true);
-    oled_draw_string(&display, 15, 35, "Ready", font, true);
-    oled_display_flush(&display);
-    
-    /* Blink LED to indicate startup complete */
-    for (int i = 0; i < 3; i++) {
-        gpio_put(LED_PIN, 1);
-        sleep_ms(100);
-        gpio_put(LED_PIN, 0);
-        sleep_ms(100);
-    }
-    
-    last_display_update_ms = get_time_ms();
-    last_usb_poll_ms = get_time_ms();
-    
-    /* ===== MAIN LOOP ===== */
-    while (true) {
-        uint64_t now = get_time_ms();
-        
-        /* USB polling */
-        if (now - last_usb_poll_ms >= USB_HOST_POLL_INTERVAL_MS) {
-            usb_host_task();
-            last_usb_poll_ms = now;
-        }
-        
-        /* Update OLED display */
-        if (now - last_display_update_ms >= DISPLAY_UPDATE_INTERVAL_MS) {
-            /* Draw appropriate page */
-            switch (current_page) {
-                case 1:
-                    draw_page_details(&display, font);
-                    break;
-                case 2:
-                    draw_page_hid_monitor(&display, font);
-                    break;
-                default:
-                    draw_page_status(&display, font);
-            }
-            
-            /* Flush to hardware */
-            if (!oled_display_flush(&display)) {
-                printf("ERROR: Failed to update display\n");
-            }
-            
-            last_display_update_ms = now;
-            
-            /* Toggle LED slowly to show it's running */
-            gpio_put(LED_PIN, (now / 500) % 2);
-        }
-        
-        /* Handle page navigation (for future BOOTSEL implementation) */
-        handle_page_navigation();
-        
-        /* Small sleep to prevent 100% CPU */
-        sleep_us(100);
-    }
-    
-    return 0;
-}
+     return 0;
+ }

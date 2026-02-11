@@ -40,7 +40,7 @@
 /* ===== Root Hub Port Configuration ===== */
 // RP2040 PIO USB uses specific ports
 // Port 0: Internal USB device controller (if using device mode)
-// Port 1: PIO-based USB host (GPIO 26=D- / GPIO 27=D+)
+// Port 1: PIO-based USB host (GPIO 27=D- / GPIO 26=D+)
 #define CFG_TUSB_RHPORT0_MODE    (OPT_MODE_HOST | OPT_MODE_FULL_SPEED)
 
 #ifdef __cplusplus
