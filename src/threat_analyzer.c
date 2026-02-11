@@ -40,9 +40,19 @@ threat_level_e threat_analyze_device(const usb_device_info_t *info) {
     
     /* Check if HID device */
     if (info->is_hid) {
-        printf("[THREAT] Device '%s' is HID class - Classification: POTENTIALLY_UNSAFE ⚠️\n",
-               info->product[0] ? info->product : "Unknown");
-        printf("[THREAT] Reason: HID devices require keystroke rate monitoring\n");
+        /* Mice (protocol 2) are safe — high report rates are normal mouse movement */
+        if (info->hid_protocol == 2) {
+            printf("[THREAT] Device '%s' is HID Mouse - Classification: SAFE ✅\n",
+                   info->product[0] ? info->product : "Unknown");
+            printf("[THREAT] Reason: Mouse input, no keystroke injection risk\n");
+            return THREAT_SAFE;
+        }
+        
+        /* Keyboards (protocol 1) and unknown HID (protocol 0) need monitoring */
+        const char *type_str = (info->hid_protocol == 1) ? "Keyboard" : "HID";
+        printf("[THREAT] Device '%s' is %s - Classification: POTENTIALLY_UNSAFE ⚠️\n",
+               info->product[0] ? info->product : "Unknown", type_str);
+        printf("[THREAT] Reason: %s devices require keystroke rate monitoring\n", type_str);
         return THREAT_POTENTIALLY_UNSAFE;
     }
     

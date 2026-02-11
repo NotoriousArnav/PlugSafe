@@ -386,6 +386,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
     if (dev) {
         dev->is_hid = true;
         dev->instance = instance;
+        dev->hid_protocol = itf_protocol;
 
         /* If device class was 0 (defined at interface level), set it to HID */
         if (dev->usb_class == 0) {
@@ -393,12 +394,17 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance,
         }
 
         /* Re-notify threat analyzer with updated device info (is_hid is now true)
-         * so it re-classifies from SAFE to POTENTIALLY_UNSAFE */
+         * so it re-classifies based on protocol (keyboard vs mouse) */
         threat_update_device_info(dev);
     }
 
-    /* Register with HID monitor for keystroke rate tracking */
-    hid_monitor_add_device(dev_addr);
+    /* Only monitor keyboards and unknown HID for keystroke rate.
+     * Mice (protocol 2) generate high report rates from normal movement. */
+    if (itf_protocol != 2) {
+        hid_monitor_add_device(dev_addr);
+    } else {
+        printf("[HID] Mouse detected — skipping keystroke rate monitoring\n");
+    }
 
     /* Start receiving HID reports */
     if (!tuh_hid_receive_report(dev_addr, instance)) {
@@ -422,13 +428,18 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
  */
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance,
                                  uint8_t const *report, uint16_t len) {
-    /* Feed to HID monitor for keystroke rate analysis */
-    hid_monitor_report(dev_addr, report, len);
+    /* Only feed keyboard/unknown HID to rate monitoring and threat analysis.
+     * Mice generate high report rates from normal movement — skip them. */
+    usb_device_info_t *dev = _find_device(dev_addr);
+    if (dev && dev->hid_protocol != 2) {
+        /* Feed to HID monitor for keystroke rate analysis */
+        hid_monitor_report(dev_addr, report, len);
 
-    /* Feed to threat analyzer for attack detection */
-    threat_update_hid_activity(dev_addr, len);
+        /* Feed to threat analyzer for attack detection */
+        threat_update_hid_activity(dev_addr, len);
+    }
 
-    /* Continue requesting reports */
+    /* Continue requesting reports (always, even for mice — TinyUSB needs this) */
     if (!tuh_hid_receive_report(dev_addr, instance)) {
         printf("[HID] ERROR: Cannot re-request report from dev_addr=%d instance=%d\n",
                dev_addr, instance);

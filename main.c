@@ -142,8 +142,13 @@ static void draw_device_screen(oled_display_t *display, const oled_font_t *font)
         oled_draw_string(display, 5, 22, buf, font, true);
         
         /* USB Class and HID indicator */
-        snprintf(buf, sizeof(buf), "Class: 0x%02X %s", dev->usb_class, 
-                 dev->is_hid ? "HID" : "STD");
+        const char *type_str = "STD";
+        if (dev->is_hid) {
+            if (dev->hid_protocol == 1) type_str = "KBD";
+            else if (dev->hid_protocol == 2) type_str = "MOUSE";
+            else type_str = "HID";
+        }
+        snprintf(buf, sizeof(buf), "Class: 0x%02X %s", dev->usb_class, type_str);
         oled_draw_string(display, 5, 32, buf, font, true);
         
         /* Threat level */

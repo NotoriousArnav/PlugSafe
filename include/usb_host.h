@@ -29,6 +29,7 @@ typedef struct {
     char product[64];           /* Product string */
     char serial[64];            /* Serial number string */
     bool is_hid;                /* Is this a HID device? */
+    uint8_t hid_protocol;       /* HID interface protocol: 0=None, 1=Keyboard, 2=Mouse */
     bool is_mounted;            /* Currently mounted? */
     bool descriptor_ready;      /* VID/PID/Class valid (immediate) */
     bool strings_ready;         /* Manufacturer/Product/Serial valid (async) */
