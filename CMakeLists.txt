@@ -23,13 +23,11 @@ add_library(oled_driver STATIC
 target_include_directories(oled_driver PUBLIC include)
 target_link_libraries(oled_driver PUBLIC pico_stdlib hardware_i2c)
 
-# Stub TinyUSB (for now - minimal implementation)
-# Full TinyUSB requires pio_usb library which isn't available in standard Pico SDK
-add_library(tinyusb_stub INTERFACE)
-target_include_directories(tinyusb_stub INTERFACE
-    ${CMAKE_SOURCE_DIR}
-    include
+# TinyUSB Stub (headers only - core functionality disabled in tusb_config.h)
+add_library(tinyusb INTERFACE)
+target_include_directories(tinyusb INTERFACE
     lib/tinyusb/src
+    ${CMAKE_SOURCE_DIR}
 )
 
 # USB Host Module (PlugSafe specific)
@@ -41,7 +39,7 @@ add_library(usb_host STATIC
 )
 
 target_include_directories(usb_host PUBLIC include lib/tinyusb/src ${CMAKE_SOURCE_DIR})
-target_link_libraries(usb_host PUBLIC pico_stdlib tinyusb_stub)
+target_link_libraries(usb_host PUBLIC pico_stdlib tinyusb)
 
 # Main Application
 add_executable(
@@ -50,6 +48,6 @@ add_executable(
 )
 
 target_include_directories(main PUBLIC include lib/tinyusb/src ${CMAKE_SOURCE_DIR})
-target_link_libraries(main pico_stdlib hardware_i2c hardware_pio hardware_irq oled_driver usb_host)
+target_link_libraries(main pico_stdlib hardware_i2c hardware_pio hardware_irq oled_driver usb_host tinyusb)
 
 pico_add_extra_outputs(main)

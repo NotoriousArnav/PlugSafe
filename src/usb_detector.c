@@ -195,12 +195,21 @@ void usb_detector_update(void)
     // Update LED blinking pattern
     usb_detector_update_led();
 
-    // Debug output on state change
+    // Handle device registration/unregistration on state change
     if (current_state != previous_state) {
         if (current_state == USB_DETECTOR_STATE_DETECTED) {
             printf("[USB Detector] Device DETECTED at %u ms\n", to_ms_since_boot(get_absolute_time()));
+            
+            /* Register device with USB host system */
+            extern bool usb_register_gpio_device(uint16_t vid, uint16_t pid);
+            usb_register_gpio_device(0x0000, 0x0000);  /* Unknown VID/PID */
+            
         } else {
             printf("[USB Detector] Device DISCONNECTED at %u ms\n", to_ms_since_boot(get_absolute_time()));
+            
+            /* Unregister device from USB host system */
+            extern void usb_unregister_gpio_device(void);
+            usb_unregister_gpio_device();
         }
         previous_state = current_state;
     }

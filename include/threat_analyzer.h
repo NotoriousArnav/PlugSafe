@@ -62,4 +62,7 @@ bool threat_is_hid_spammy(uint8_t dev_addr);
 /* Remove device from threat tracking */
 void threat_remove_device(uint8_t dev_addr);
 
+/* Add device to threat tracking (called by USB host) */
+void threat_add_device(const usb_device_info_t *dev_info);
+
 #endif /* THREAT_ANALYZER_H */

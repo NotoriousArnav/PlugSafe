@@ -16,8 +16,9 @@
 #include "pico/time.h"
 #include "tusb_config.h"
 
-/* Threat tracking for connected devices */
-static device_threat_t g_threat_devices[CFG_TUH_DEVICE_MAX];
+/* Threat tracking for connected devices (max 4 devices) */
+#define MAX_TRACKED_DEVICES 4
+static device_threat_t g_threat_devices[MAX_TRACKED_DEVICES];
 
 /* ===== Public API ===== */
 
@@ -86,7 +87,7 @@ threat_level_e threat_get_current_level(uint8_t dev_addr) {
 }
 
 device_threat_t* threat_get_device_status(uint8_t dev_addr) {
-    for (int i = 0; i < CFG_TUH_DEVICE_MAX; i++) {
+    for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
         if (g_threat_devices[i].device.dev_addr == dev_addr && 
             g_threat_devices[i].device.is_mounted) {
             return &g_threat_devices[i];
@@ -94,7 +95,7 @@ device_threat_t* threat_get_device_status(uint8_t dev_addr) {
     }
     
     /* Not found - create new entry */
-    for (int i = 0; i < CFG_TUH_DEVICE_MAX; i++) {
+    for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
         if (!g_threat_devices[i].device.is_mounted) {
             device_threat_t *threat = &g_threat_devices[i];
             memset(threat, 0, sizeof(*threat));
@@ -117,7 +118,7 @@ device_threat_t* threat_get_device_status(uint8_t dev_addr) {
 
 device_threat_t* threat_get_device_at_index(uint8_t index) {
     uint8_t count = 0;
-    for (int i = 0; i < CFG_TUH_DEVICE_MAX; i++) {
+    for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
         if (g_threat_devices[i].device.is_mounted) {
             if (count == index) {
                 return &g_threat_devices[i];
@@ -134,7 +135,7 @@ bool threat_is_hid_spammy(uint8_t dev_addr) {
 }
 
 void threat_remove_device(uint8_t dev_addr) {
-    for (int i = 0; i < CFG_TUH_DEVICE_MAX; i++) {
+    for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
         if (g_threat_devices[i].device.dev_addr == dev_addr) {
             printf("[THREAT] Device '%s' removed from threat tracking\n",
                    g_threat_devices[i].device.product[0] ? g_threat_devices[i].device.product : "Unknown");
@@ -143,3 +144,32 @@ void threat_remove_device(uint8_t dev_addr) {
         }
     }
 }
+
+void threat_add_device(const usb_device_info_t *dev_info) {
+    if (!dev_info) {
+        return;
+    }
+    
+    /* Find free slot */
+    for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
+        if (!g_threat_devices[i].device.is_mounted) {
+            device_threat_t *threat = &g_threat_devices[i];
+            memset(threat, 0, sizeof(*threat));
+            
+            /* Copy device info */
+            memcpy(&threat->device, dev_info, sizeof(*dev_info));
+            
+            /* Analyze threat level */
+            threat->threat_level = threat_analyze_device(dev_info);
+            threat->is_active = true;
+            
+            printf("[THREAT] Device '%s' added to threat tracking\n",
+                   dev_info->product[0] ? dev_info->product : "Unknown");
+            
+            return;
+        }
+    }
+    
+    printf("[THREAT] [ERROR] Threat tracking array full, cannot add device\n");
+}
+
