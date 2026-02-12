@@ -10,6 +10,7 @@
  */
 
 #include "threat_analyzer.h"
+#include "hid_monitor.h"
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
@@ -39,9 +40,19 @@ threat_level_e threat_analyze_device(const usb_device_info_t *info) {
     
     /* Check if HID device */
     if (info->is_hid) {
-        printf("[THREAT] Device '%s' is HID class - Classification: POTENTIALLY_UNSAFE ⚠️\n",
-               info->product[0] ? info->product : "Unknown");
-        printf("[THREAT] Reason: HID devices require keystroke rate monitoring\n");
+        /* Mice (protocol 2) are safe — high report rates are normal mouse movement */
+        if (info->hid_protocol == 2) {
+            printf("[THREAT] Device '%s' is HID Mouse - Classification: SAFE ✅\n",
+                   info->product[0] ? info->product : "Unknown");
+            printf("[THREAT] Reason: Mouse input, no keystroke injection risk\n");
+            return THREAT_SAFE;
+        }
+        
+        /* Keyboards (protocol 1) and unknown HID (protocol 0) need monitoring */
+        const char *type_str = (info->hid_protocol == 1) ? "Keyboard" : "HID";
+        printf("[THREAT] Device '%s' is %s - Classification: POTENTIALLY_UNSAFE ⚠️\n",
+               info->product[0] ? info->product : "Unknown", type_str);
+        printf("[THREAT] Reason: %s devices require keystroke rate monitoring\n", type_str);
         return THREAT_POTENTIALLY_UNSAFE;
     }
     
@@ -58,19 +69,31 @@ void threat_update_hid_activity(uint8_t dev_addr, uint16_t report_len) {
     if (threat) {
         threat->hid_report_count++;
         
-        /* Calculate keystroke rate (very simple: assume 1 keystroke per report) */
-        uint64_t time_ms = to_ms_since_boot(get_absolute_time());
-        uint64_t elapsed_ms = time_ms - threat->device.connected_time_ms;
-        threat->hid_reports_per_sec = (elapsed_ms > 0) ? (threat->hid_report_count * 1000) / elapsed_ms : 0;
+        /* Use the windowed keystroke rate from hid_monitor (1-second sliding window)
+         * instead of computing an all-time average which dilutes burst detection */
+        uint32_t windowed_rate = hid_get_keystroke_rate(dev_addr);
+        threat->hid_reports_per_sec = windowed_rate;
         
-        /* Check if spammy (malicious) */
-        if (threat->hid_reports_per_sec > HID_KEYSTROKE_THRESHOLD_HZ) {
+        /* Ensure the device is marked as HID in our snapshot (it may have been
+         * added before tuh_hid_mount_cb fired) */
+        if (!threat->device.is_hid) {
+            usb_device_info_t *live_dev = usb_get_device_info(dev_addr);
+            if (live_dev && live_dev->is_hid) {
+                threat->device.is_hid = true;
+                if (threat->threat_level < THREAT_POTENTIALLY_UNSAFE) {
+                    threat->threat_level = THREAT_POTENTIALLY_UNSAFE;
+                }
+            }
+        }
+        
+        /* Check if spammy (malicious) — MALICIOUS is sticky, never de-escalates */
+        if (windowed_rate > HID_KEYSTROKE_THRESHOLD_HZ) {
             if (threat->threat_level != THREAT_MALICIOUS) {
                 printf("\n[THREAT] 🚨 THREAT ESCALATION 🚨\n");
                 printf("[THREAT] Device '%s' detected with rapid keystroke rate!\n",
                        threat->device.product[0] ? threat->device.product : "Unknown");
                 printf("[THREAT] Rate: %u keys/sec (threshold: %d keys/sec)\n",
-                       threat->hid_reports_per_sec, HID_KEYSTROKE_THRESHOLD_HZ);
+                       windowed_rate, HID_KEYSTROKE_THRESHOLD_HZ);
                 printf("[THREAT] Classification: MALICIOUS 🚨\n");
                 printf("[THREAT] RECOMMENDATION: DISCONNECT DEVICE IMMEDIATELY\n");
                 printf("[THREAT] This appears to be an automated keystroke injection attack\n");
@@ -94,25 +117,7 @@ device_threat_t* threat_get_device_status(uint8_t dev_addr) {
         }
     }
     
-    /* Not found - create new entry */
-    for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
-        if (!g_threat_devices[i].device.is_mounted) {
-            device_threat_t *threat = &g_threat_devices[i];
-            memset(threat, 0, sizeof(*threat));
-            threat->device.dev_addr = dev_addr;
-            
-            /* Analyze device (assumption: must call usb_host_init first to populate device info) */
-            usb_device_info_t *usb_info = usb_get_device_info(dev_addr);
-            if (usb_info) {
-                memcpy(&threat->device, usb_info, sizeof(*usb_info));
-                threat->threat_level = threat_analyze_device(usb_info);
-            }
-            
-            threat->is_active = true;
-            return threat;
-        }
-    }
-    
+    /* Lookup only — do NOT auto-create. Device must be added via threat_add_device(). */
     return NULL;
 }
 
@@ -171,5 +176,37 @@ void threat_add_device(const usb_device_info_t *dev_info) {
     }
     
     printf("[THREAT] [ERROR] Threat tracking array full, cannot add device\n");
+}
+
+void threat_update_device_info(const usb_device_info_t *dev_info) {
+    if (!dev_info) {
+        return;
+    }
+    
+    /* Find existing tracked device by dev_addr */
+    for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
+        if (g_threat_devices[i].device.dev_addr == dev_info->dev_addr &&
+            g_threat_devices[i].device.is_mounted) {
+            device_threat_t *threat = &g_threat_devices[i];
+            
+            /* Update the device snapshot with latest info */
+            memcpy(&threat->device, dev_info, sizeof(*dev_info));
+            
+            /* Re-classify threat level (only escalate, never de-escalate) */
+            threat_level_e new_level = threat_analyze_device(dev_info);
+            if (new_level > threat->threat_level) {
+                threat->threat_level = new_level;
+                printf("[THREAT] Device '%s' re-classified to level %d\n",
+                       dev_info->product[0] ? dev_info->product : "Unknown",
+                       new_level);
+            }
+            
+            return;
+        }
+    }
+    
+    /* Device not found in threat tracker — add it */
+    printf("[THREAT] Device %d not tracked yet, adding via update\n", dev_info->dev_addr);
+    threat_add_device(dev_info);
 }
 

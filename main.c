@@ -20,7 +20,6 @@
 #include "oled_text.h"
 #include "oled_font.h"
 #include "usb_host.h"
-#include "usb_detector.h"
 #include "threat_analyzer.h"
 #include "hid_monitor.h"
 
@@ -46,21 +45,34 @@
 /* Display page enumeration for state management */
 typedef enum {
     DISPLAY_PAGE_WELCOME = 0,      /* Welcome/waiting screen */
-    DISPLAY_PAGE_DEVICE_INFO = 1   /* Device details screen */
+    DISPLAY_PAGE_DEVICE_INFO = 1,  /* Device details screen */
+    DISPLAY_MODE_COUNT = 2
 } display_page_t;
 
-/* Current display page */
+/* Display mode enumeration - switches between VID/PID and Manufacturer */
+typedef enum {
+    DISPLAY_MODE_VID_PID = 0,        /* Show VID/PID and USB Class */
+    DISPLAY_MODE_MANUFACTURER = 1    /* Show Manufacturer/Product strings */
+} display_mode_t;
+
+/* Current display page and mode */
 static display_page_t current_page = DISPLAY_PAGE_WELCOME;
+static display_mode_t current_mode = DISPLAY_MODE_VID_PID;
 
 /* Time tracking for display updates */
 static uint64_t last_display_update_ms = 0;
 static uint64_t last_usb_poll_ms = 0;
+static uint64_t last_bootsel_check_ms = 0;
 
-/* Track last USB detector state for edge detection */
-static usb_detector_state_t last_detector_state = USB_DETECTOR_STATE_SEARCHING;
+/* Track last device count for edge detection */
+static uint8_t last_device_count = 0;
 
 /* LED control with adaptive blinking based on device state */
 static uint64_t last_led_update_ms = 0;
+
+/* BOOTSEL button debouncing */
+#define BOOTSEL_DEBOUNCE_MS 200
+static bool bootsel_pressed_prev = false;
 
 /* ============================================================================
  * DISPLAY HELPER FUNCTIONS
@@ -89,7 +101,9 @@ static void draw_welcome_screen(oled_display_t *display, const oled_font_t *font
 }
 
 /**
- * @brief Draw the device information screen
+ * @brief Draw the device information screen with dual mode support
+ * Mode 1: VID/PID and USB Class (default)
+ * Mode 2: Manufacturer/Product/Serial (press BOOTSEL to toggle)
  */
 static void draw_device_screen(oled_display_t *display, const oled_font_t *font) {
     oled_display_clear(display);
@@ -112,43 +126,110 @@ static void draw_device_screen(oled_display_t *display, const oled_font_t *font)
     /* Title */
     oled_draw_string(display, 10, 2,   "Device Detected!", font, true);
     
-    /* Device name/product (truncated) */
-    char product_short[20];
-    strncpy(product_short, dev->product[0] ? dev->product : "Unknown Device", 19);
-    product_short[19] = '\0';
-    oled_draw_string(display, 5, 12, product_short, font, true);
-    
-    /* VID/PID */
     char buf[28];
-    snprintf(buf, sizeof(buf), "VID:0x%04X PID:0x%04X", dev->vid, dev->pid);
-    oled_draw_string(display, 5, 22, buf, font, true);
     
-    /* USB Class and HID indicator */
-    snprintf(buf, sizeof(buf), "Class: 0x%02X %s", dev->usb_class, 
-             dev->is_hid ? "HID" : "STD");
-    oled_draw_string(display, 5, 32, buf, font, true);
-    
-    /* Threat level */
-    device_threat_t *threat = threat_get_device_at_index(0);
-    const char *threat_str = "SAFE";
-    if (threat) {
-        switch (threat->threat_level) {
-            case THREAT_MALICIOUS:
-                threat_str = "MALICIOUS!!!";
-                break;
-            case THREAT_POTENTIALLY_UNSAFE:
-                threat_str = "CAUTION";
-                break;
-            default:
-                threat_str = "SAFE";
+    if (current_mode == DISPLAY_MODE_VID_PID) {
+        /* Mode 1: VID/PID display */
+        
+        /* Device name/product (truncated) */
+        char product_short[20];
+        strncpy(product_short, dev->product[0] ? dev->product : "Unknown Device", 19);
+        product_short[19] = '\0';
+        oled_draw_string(display, 5, 12, product_short, font, true);
+        
+        /* VID/PID */
+        snprintf(buf, sizeof(buf), "VID:0x%04X PID:0x%04X", dev->vid, dev->pid);
+        oled_draw_string(display, 5, 22, buf, font, true);
+        
+        /* USB Class and HID indicator */
+        const char *type_str = "STD";
+        if (dev->is_hid) {
+            if (dev->hid_protocol == 1) type_str = "KBD";
+            else if (dev->hid_protocol == 2) type_str = "MOUSE";
+            else type_str = "HID";
         }
+        snprintf(buf, sizeof(buf), "Class: 0x%02X %s", dev->usb_class, type_str);
+        oled_draw_string(display, 5, 32, buf, font, true);
+        
+        /* Threat level */
+        device_threat_t *threat = threat_get_device_at_index(0);
+        const char *threat_str = "SAFE";
+        if (threat) {
+            switch (threat->threat_level) {
+                case THREAT_MALICIOUS:
+                    threat_str = "MALICIOUS!!!";
+                    break;
+                case THREAT_POTENTIALLY_UNSAFE:
+                    threat_str = "CAUTION";
+                    break;
+                default:
+                    threat_str = "SAFE";
+            }
+        }
+        
+        snprintf(buf, sizeof(buf), "Threat: %s", threat_str);
+        oled_draw_string(display, 5, 42, buf, font, true);
+        
+        /* Show live keystroke rate for HID devices, mode indicator otherwise */
+        if (dev->is_hid) {
+            uint32_t rate = threat ? threat->hid_reports_per_sec : 0;
+            snprintf(buf, sizeof(buf), "Rate:%u k/s", rate);
+            oled_draw_string(display, 0, 56, buf, font, true);
+        } else {
+            oled_draw_string(display, 0, 56, "Mode: IDs", font, true);
+        }
+        oled_draw_string(display, 80, 56, "BOOTSEL", font, true);
+        
+    } else {
+        /* Mode 2: Manufacturer/Product/Serial display */
+        
+        /* Manufacturer (truncated) */
+        char mfg_short[18];
+        strncpy(mfg_short, dev->manufacturer[0] ? dev->manufacturer : "Unknown", 17);
+        mfg_short[17] = '\0';
+        oled_draw_string(display, 5, 12, mfg_short, font, true);
+        
+        /* Product (truncated) */
+        char prod_short[18];
+        strncpy(prod_short, dev->product[0] ? dev->product : "Unknown Device", 17);
+        prod_short[17] = '\0';
+        oled_draw_string(display, 5, 22, prod_short, font, true);
+        
+        /* Serial (truncated) */
+        char serial_short[18];
+        strncpy(serial_short, dev->serial[0] ? dev->serial : "No Serial", 17);
+        serial_short[17] = '\0';
+        oled_draw_string(display, 5, 32, serial_short, font, true);
+        
+        /* Threat level */
+        device_threat_t *threat = threat_get_device_at_index(0);
+        const char *threat_str = "SAFE";
+        if (threat) {
+            switch (threat->threat_level) {
+                case THREAT_MALICIOUS:
+                    threat_str = "MALICIOUS!!!";
+                    break;
+                case THREAT_POTENTIALLY_UNSAFE:
+                    threat_str = "CAUTION";
+                    break;
+                default:
+                    threat_str = "SAFE";
+            }
+        }
+        
+        snprintf(buf, sizeof(buf), "Threat: %s", threat_str);
+        oled_draw_string(display, 5, 42, buf, font, true);
+        
+        /* Show live keystroke rate for HID devices, mode indicator otherwise */
+        if (dev->is_hid) {
+            uint32_t rate = threat ? threat->hid_reports_per_sec : 0;
+            snprintf(buf, sizeof(buf), "Rate:%u k/s", rate);
+            oled_draw_string(display, 0, 56, buf, font, true);
+        } else {
+            oled_draw_string(display, 0, 56, "Mode: Strings", font, true);
+        }
+        oled_draw_string(display, 80, 56, "BOOTSEL", font, true);
     }
-    
-    snprintf(buf, sizeof(buf), "Threat: %s", threat_str);
-    oled_draw_string(display, 5, 42, buf, font, true);
-    
-    /* Indicator */
-    oled_draw_string(display, 5, 56, "Plugged In...", font, true);
 }
 
 /**
@@ -175,6 +256,11 @@ int main() {
     /* Initialize LED for debugging */
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
+    
+    /* Initialize BOOTSEL button (GPIO 24, active low) */
+    gpio_init(BOOTSEL_PIN);
+    gpio_set_dir(BOOTSEL_PIN, GPIO_IN);
+    gpio_pull_up(BOOTSEL_PIN);
     
     printf("\n========================================\n");
     printf("PlugSafe - USB Threat Detector\n");
@@ -227,11 +313,6 @@ int main() {
     }
     printf("Display initialized\n");
     
-    /* Initialize USB detector (GPIO-based passive detection) */
-    printf("Initializing USB detector...\n");
-    usb_detector_init();
-    printf("USB detector initialized\n");
-    
     /* Initialize USB Host (TinyUSB active enumeration) */
     printf("Initializing USB host...\n");
     if (!usb_host_init()) {
@@ -253,7 +334,7 @@ int main() {
     /* Display startup message */
     oled_display_clear(&display);
     oled_draw_string(&display, 5, 20, "PlugSafe Booting...", font, true);
-    oled_draw_string(&display, 5, 40, "Connect USB Device", font, true);
+    oled_draw_string(&display, 5, 40, "The Protection your PC deserves", font, true);
     oled_display_flush(&display);
     sleep_ms(2000);
     
@@ -265,27 +346,47 @@ int main() {
         sleep_ms(100);
     }
     
-    printf("\nEntering main event loop...\n");
+     printf("\nEntering main event loop...\n");
     printf("Display will refresh every %d ms\n", DISPLAY_UPDATE_INTERVAL_MS);
-    printf("USB polling every %d ms\n\n", USB_HOST_POLL_INTERVAL_MS);
+    printf("USB polling every %d ms\n", USB_HOST_POLL_INTERVAL_MS);
+    printf("Press BOOTSEL button to toggle display mode (VID/PID <-> Manufacturer)\n\n");
     
     /* Main event loop */
     while (1) {
         uint64_t now_ms = time_us_64() / 1000;
         
+        /* BOOTSEL button handling for display mode toggle (every 200ms debounce) */
+        if (now_ms - last_bootsel_check_ms >= BOOTSEL_DEBOUNCE_MS) {
+            last_bootsel_check_ms = now_ms;
+            
+            /* Read BOOTSEL button state (GPIO 24, active low) */
+            bool bootsel_pressed = !gpio_get(BOOTSEL_PIN);
+            
+            /* Detect rising edge (button pressed) */
+            if (bootsel_pressed && !bootsel_pressed_prev) {
+                /* Toggle display mode */
+                current_mode = (current_mode == DISPLAY_MODE_VID_PID) ? 
+                               DISPLAY_MODE_MANUFACTURER : DISPLAY_MODE_VID_PID;
+                printf("[BUTTON] Display mode toggled to: %s\n",
+                       current_mode == DISPLAY_MODE_VID_PID ? "VID/PID" : "Manufacturer");
+                /* Force immediate display update */
+                last_display_update_ms = 0;
+            }
+            bootsel_pressed_prev = bootsel_pressed;
+        }
+        
         /* USB Host polling (every 10ms) */
         if (now_ms - last_usb_poll_ms >= USB_HOST_POLL_INTERVAL_MS) {
             last_usb_poll_ms = now_ms;
             usb_host_task();
-            usb_detector_update();
         }
         
-        /* Get current USB detector state for edge detection */
-        usb_detector_state_t current_detector_state = usb_detector_get_state();
-        bool device_state_changed = (current_detector_state != last_detector_state);
+        /* Edge detection: check if device count changed */
+        uint8_t current_device_count = usb_get_device_count();
+        bool device_state_changed = (current_device_count != last_device_count);
         
         if (device_state_changed) {
-            last_detector_state = current_detector_state;
+            last_device_count = current_device_count;
             /* Force immediate display update on device connection/disconnection */
             last_display_update_ms = 0;
         }
@@ -318,13 +419,13 @@ int main() {
             oled_display_flush(&display);
             
             /* Adaptive LED blinking based on device state:
-             * - Device connected (DETECTED): Fast blink (200ms ON, 200ms OFF)
-             * - Device searching (SEARCHING): Slow blink (500ms ON, 500ms OFF)
+             * - Device connected: Fast blink (200ms ON, 200ms OFF)
+             * - No device: Slow blink (500ms ON, 500ms OFF)
              */
             if (now_ms - last_led_update_ms >= 100) {
                 last_led_update_ms = now_ms;
                 
-                if (current_detector_state == USB_DETECTOR_STATE_DETECTED) {
+                if (current_device_count > 0) {
                     /* Device connected - fast blink (200ms half period) */
                     gpio_put(LED_PIN, (now_ms / 200) % 2);
                 } else {

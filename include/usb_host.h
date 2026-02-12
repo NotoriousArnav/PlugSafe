@@ -19,6 +19,7 @@
 /* USB Device Information Structure */
 typedef struct {
     uint8_t dev_addr;           /* TinyUSB device address */
+    uint8_t instance;           /* HID interface instance (0-3) */
     uint16_t vid;               /* Vendor ID */
     uint16_t pid;               /* Product ID */
     uint8_t usb_class;          /* USB Device Class */
@@ -28,7 +29,10 @@ typedef struct {
     char product[64];           /* Product string */
     char serial[64];            /* Serial number string */
     bool is_hid;                /* Is this a HID device? */
+    uint8_t hid_protocol;       /* HID interface protocol: 0=None, 1=Keyboard, 2=Mouse */
     bool is_mounted;            /* Currently mounted? */
+    bool descriptor_ready;      /* VID/PID/Class valid (immediate) */
+    bool strings_ready;         /* Manufacturer/Product/Serial valid (async) */
     uint64_t connected_time_ms; /* Time device was connected */
 } usb_device_info_t;
 
@@ -52,20 +56,5 @@ bool usb_is_device_mounted(uint8_t dev_addr);
 
 /* Check if a USB hub is currently connected (warning state) */
 bool usb_is_hub_connected(void);
-
-/* GPIO-based device registration (for passive USB detection) */
-/**
- * @brief Register a device detected by GPIO (when D+ or D- goes high)
- * @param vid Vendor ID (use 0x0000 if unknown)
- * @param pid Product ID (use 0x0000 if unknown)
- * @return true if registered, false if device array is full
- */
-bool usb_register_gpio_device(uint16_t vid, uint16_t pid);
-
-/**
- * @brief Unregister device detected by GPIO (when D+ and D- go low)
- * Removes the most recently added device from tracking
- */
-void usb_unregister_gpio_device(void);
 
 #endif /* USB_HOST_H */
