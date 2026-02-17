@@ -1,0 +1,47 @@
+name: Build & Release Firmware
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi python3
+
+      - name: Configure CMake
+        run: cmake -B build -DPICO_SDK_FETCH_FROM_GIT=ON
+
+      - name: Build firmware
+        run: cmake --build build --parallel
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugsafe-firmware-${{ github.ref_name }}
+          path: |
+            build/main.uf2
+            build/main.elf
+            build/main.bin
+            build/main.hex
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PlugSafe ${{ github.ref_name }}
+          generate_release_notes: true
+          files: build/main.uf2
